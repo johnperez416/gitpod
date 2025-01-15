@@ -1,12 +1,12 @@
 // Copyright (c) 2020 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package workspace
 
 import (
 	"context"
-	"net/rpc"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -16,7 +16,6 @@ import (
 
 	agent "github.com/gitpod-io/gitpod/test/pkg/agent/workspace/api"
 	"github.com/gitpod-io/gitpod/test/pkg/integration"
-	"github.com/gitpod-io/gitpod/test/pkg/integration/common"
 )
 
 type GitTest struct {
@@ -27,7 +26,7 @@ type GitTest struct {
 	Action        GitFunc
 }
 
-type GitFunc func(rsa *rpc.Client, git common.GitClient, workspaceRoot string) error
+type GitFunc func(rsa *integration.RpcClient, git integration.GitClient, workspaceRoot string) error
 
 func TestGitActions(t *testing.T) {
 	userToken, _ := os.LookupEnv("USER_TOKEN")
@@ -37,26 +36,29 @@ func TestGitActions(t *testing.T) {
 	tests := []GitTest{
 		{
 			Name:          "create, add and commit",
-			ContextURL:    "github.com/gitpod-io/gitpod-test-repo/tree/integration-test/commit-and-push",
+			ContextURL:    "github.com/gitpod-io/gitpod-test-repo/tree/integration-test/commit",
 			WorkspaceRoot: "/workspace/gitpod-test-repo",
-			Action: func(rsa *rpc.Client, git common.GitClient, workspaceRoot string) (err error) {
+			Action: func(rsa *integration.RpcClient, git integration.GitClient, workspaceRoot string) (err error) {
 				var resp agent.ExecResponse
 				err = rsa.Call("WorkspaceAgent.Exec", &agent.ExecRequest{
 					Dir:     workspaceRoot,
 					Command: "bash",
 					Args: []string{
 						"-c",
-						"echo \"another test run...\" >> file_to_commit.txt",
+						"touch file_to_commit.txt",
 					},
 				}, &resp)
 				if err != nil {
 					return err
 				}
+				if resp.ExitCode != 0 {
+					return fmt.Errorf("file create returned rc: %d, out: %v, err: %v", resp.ExitCode, resp.Stdout, resp.Stderr)
+				}
 				err = git.ConfigSafeDirectory()
 				if err != nil {
 					return err
 				}
-				err = git.ConfigUserName(workspaceRoot)
+				err = git.ConfigUserName(workspaceRoot, username)
 				if err != nil {
 					return err
 				}
@@ -68,7 +70,7 @@ func TestGitActions(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				err = git.Commit(workspaceRoot, "automatic test commit", false)
+				err = git.Commit(workspaceRoot, "automatic test commit", false, "--allow-empty")
 				if err != nil {
 					return err
 				}
@@ -76,28 +78,33 @@ func TestGitActions(t *testing.T) {
 			},
 		},
 		{
+			// as of Apr 14, 2023, test fails with:
+			// fatal: could not read Username for 'https://github.com': No such device or address
 			Skip:          true,
 			Name:          "create, add and commit and PUSH",
 			ContextURL:    "github.com/gitpod-io/gitpod-test-repo/tree/integration-test/commit-and-push",
 			WorkspaceRoot: "/workspace/gitpod-test-repo",
-			Action: func(rsa *rpc.Client, git common.GitClient, workspaceRoot string) (err error) {
+			Action: func(rsa *integration.RpcClient, git integration.GitClient, workspaceRoot string) (err error) {
 				var resp agent.ExecResponse
 				err = rsa.Call("WorkspaceAgent.Exec", &agent.ExecRequest{
 					Dir:     workspaceRoot,
 					Command: "bash",
 					Args: []string{
 						"-c",
-						"echo \"another test run...\" >> file_to_commit.txt",
+						"touch file_to_commit.txt",
 					},
 				}, &resp)
 				if err != nil {
 					return err
 				}
+				if resp.ExitCode != 0 {
+					return fmt.Errorf("file create returned rc: %d, out: %v, err: %v", resp.ExitCode, resp.Stdout, resp.Stderr)
+				}
 				err = git.ConfigSafeDirectory()
 				if err != nil {
 					return err
 				}
-				err = git.ConfigUserName(workspaceRoot)
+				err = git.ConfigUserName(workspaceRoot, username)
 				if err != nil {
 					return err
 				}
@@ -109,7 +116,7 @@ func TestGitActions(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				err = git.Commit(workspaceRoot, "automatic test commit", false)
+				err = git.Commit(workspaceRoot, "automatic test commit", false, "--allow-empty")
 				if err != nil {
 					return err
 				}
@@ -124,8 +131,8 @@ func TestGitActions(t *testing.T) {
 
 	f := features.New("GitActions").
 		WithLabel("component", "workspace").
-		Assess("it can run git actions", func(_ context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		Assess("it can run git actions", func(testCtx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			ctx, cancel := context.WithTimeout(testCtx, time.Duration(5*len(tests))*time.Minute)
 			defer cancel()
 
 			api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
@@ -138,12 +145,13 @@ func TestGitActions(t *testing.T) {
 				FF   string
 			}{
 				{Name: "classic"},
-				{Name: "pvc", FF: "persistent_volume_claim"},
 			}
 
 			for _, ff := range ffs {
 				for _, test := range tests {
+					test := test
 					t.Run(test.ContextURL+"_"+ff.Name, func(t *testing.T) {
+						t.Parallel()
 						if test.Skip {
 							t.SkipNow()
 						}
@@ -169,7 +177,7 @@ func TestGitActions(t *testing.T) {
 							sapi := integration.NewComponentAPI(sctx, cfg.Namespace(), kubeconfig, cfg.Client())
 							defer sapi.Done(t)
 
-							_, err := stopWs(true, sapi)
+							_, err := stopWs(false, sapi)
 							if err != nil {
 								t.Fatal(err)
 							}
@@ -182,15 +190,16 @@ func TestGitActions(t *testing.T) {
 						defer rsa.Close()
 						integration.DeferCloser(t, closer)
 
-						git := common.Git(rsa)
+						git := integration.Git(rsa)
 						err = test.Action(rsa, git, test.WorkspaceRoot)
 						if err != nil {
 							t.Fatal(err)
 						}
+						t.Log("test finished successfully")
 					})
 				}
 			}
-			return ctx
+			return testCtx
 		}).
 		Feature()
 

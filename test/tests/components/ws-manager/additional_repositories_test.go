@@ -1,6 +1,6 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package wsmanager
 
@@ -23,7 +23,7 @@ import (
 func TestAdditionalRepositories(t *testing.T) {
 	f := features.New("additional-repositories").
 		WithLabel("component", "ws-manager").
-		Assess("can open a workspace using the additionalRepositories property", func(_ context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("can open a workspace using the additionalRepositories property", func(testCtx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			tests := []struct {
 				Name       string
 				ContextURL string
@@ -41,11 +41,14 @@ func TestAdditionalRepositories(t *testing.T) {
 				},
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(5*len(tests))*time.Minute)
-			defer cancel()
-
 			for _, test := range tests {
+				test := test
 				t.Run(test.Name, func(t *testing.T) {
+					t.Parallel()
+
+					ctx, cancel := context.WithTimeout(testCtx, time.Duration(5*len(tests))*time.Minute)
+					defer cancel()
+
 					api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
 					t.Cleanup(func() {
 						api.Done(t)
@@ -72,12 +75,12 @@ func TestAdditionalRepositories(t *testing.T) {
 						t.Fatal(err)
 					}
 
-					defer func() {
+					t.Cleanup(func() {
 						// stop workspace in defer function to prevent we forget to stop the workspace
 						if err := stopWorkspace(t, cfg, stopWs); err != nil {
 							t.Errorf("cannot stop workspace: %q", err)
 						}
-					}()
+					})
 
 					rsa, closer, err := integration.Instrument(integration.ComponentWorkspace, "workspace", cfg.Namespace(), kubeconfig, cfg.Client(),
 						integration.WithInstanceID(ws.Req.Id),
@@ -109,7 +112,7 @@ func TestAdditionalRepositories(t *testing.T) {
 				})
 			}
 
-			return ctx
+			return testCtx
 		}).
 		Feature()
 

@@ -1,6 +1,6 @@
 // Copyright (c) 2020 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package ports
 
@@ -40,7 +40,7 @@ type ServedPortsObserver interface {
 }
 
 const (
-	maxSubscriptions = 10
+	maxSubscriptions = 100
 
 	fnNetTCP  = "/proc/net/tcp"
 	fnNetTCP6 = "/proc/net/tcp6"
@@ -83,7 +83,15 @@ func (p *PollingServedPortsObserver) Observe(ctx context.Context) (<-chan []Serv
 				visited = make(map[string]struct{})
 				ports   []ServedPort
 			)
-			for _, fn := range []string{fnNetTCP, fnNetTCP6} {
+
+			var protos []string
+			for _, path := range []string{fnNetTCP, fnNetTCP6} {
+				if _, err := os.Stat(path); err == nil {
+					protos = append(protos, path)
+				}
+			}
+
+			for _, fn := range protos {
 				fc, err := p.fileOpener(fn)
 				if err != nil {
 					errchan <- err

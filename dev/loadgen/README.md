@@ -18,7 +18,7 @@ You can find a short explanation of this tool in this [loom video](https://www.l
   ```
 - Port-forward ws-manager
   ```console
-  kubectl port-forward deployment/ws-manager 12001:8080
+  while true; do kubectl port-forward deployment/ws-manager-mk2 12001:8080; done
   ```
 - Compile loadgen
   ```console
@@ -27,7 +27,7 @@ You can find a short explanation of this tool in this [loom video](https://www.l
   ```
 - Now you can start the benchmark with loadgen. If you want to keep the workspaces around after testing, add `--interactive`. Loadgen will then ask you before taking any destructive action. If you do not specify `--interative` loadgen will wait 2 minutes before workspaces are deleted. The config file located at the `./dev/loadgen/configs` folder.
   ```console
-  ./loadgen benchmark [config-file] --host localhost:12001 --tls ./wsman-tls --interactive
+  ./loadgen benchmark ./configs/prod-benchmark.yaml --host localhost:12001 --tls ./wsman-tls --interactive
   ```
 
 In order to configure the benchmark, you can use the configuration file
@@ -57,7 +57,7 @@ In order to configure the benchmark, you can use the configuration file
 | repo.auth.authUser | The user that should be used for authentication |
 | repo.auth.authPassword | The password that should be used for authentication |
 
-After the benchmark has completed, you will find a benchmark-result.json file in your working directory, that contains information about every started workspace.
+After the benchmark has completed, the command will print where the results are stored (this will be a `benchmark-result.json` file inside a unique directory under `results/`). This results file contains information about every started workspace.
 
 ```
 [

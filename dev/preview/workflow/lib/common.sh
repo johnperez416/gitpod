@@ -2,7 +2,7 @@
 
 # this script is meant to be sourced
 
-SCRIPT_PATH=$(dirname "${BASH_SOURCE[0]}")
+FILE_PATH=$(dirname "${BASH_SOURCE[0]}")
 
 # predefined exit codes for checks
 export ERROR_WRONG_WORKSPACE=30
@@ -13,7 +13,7 @@ export ERROR_NO_PLAN=34
 export ERROR_PLAN_FAIL=35
 
 function import() {
-  local file="${SCRIPT_PATH}/${1}"
+  local file="${FILE_PATH}/${1}"
   if [ -f "${file}" ]; then
     # shellcheck disable=SC1090
     source "${file}"
@@ -27,12 +27,18 @@ function import() {
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 # NC=no color
 NC='\033[0m'
 
 function log_error() {
   local text=$1
   echo -e "${RED}ERROR: ${NC}${text}" 1>&2
+}
+
+function log_warn() {
+  local text="$1"
+  echo -e "${YELLOW}WARN: ${NC}${text}"
 }
 
 function log_success() {
@@ -53,5 +59,19 @@ function ask() {
             [Yy]*) return 0  ;;
             [Nn]*) echo "Aborted" ; return  1 ;;
         esac
+    done
+}
+
+function choose() {
+    local text=$1
+    shift
+    local choices=("$@")
+
+    echo -e "${text}" 1>&2
+    select choice in "${choices[@]}"; do
+       case $choice in
+             *) echo "${choice}"
+                break ;;
+       esac
     done
 }

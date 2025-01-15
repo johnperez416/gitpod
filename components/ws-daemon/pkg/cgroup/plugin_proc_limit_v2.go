@@ -1,6 +1,6 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package cgroup
 
@@ -34,7 +34,7 @@ func NewProcLimiterV2(processes int64) (*ProcLimiterV2, error) {
 func (c *ProcLimiterV2) Name() string  { return "proc-limiter-v2" }
 func (c *ProcLimiterV2) Type() Version { return Version2 }
 
-func (c *ProcLimiterV2) Apply(ctx context.Context, basePath, cgroupPath string) error {
+func (c *ProcLimiterV2) Apply(ctx context.Context, opts *PluginOptions) error {
 	update := make(chan struct{}, 1)
 	go func() {
 		defer close(update)
@@ -53,19 +53,19 @@ func (c *ProcLimiterV2) Apply(ctx context.Context, basePath, cgroupPath string) 
 	}()
 
 	go func() {
-		log.WithField("cgroupPath", cgroupPath).Debug("starting proc limiting")
+		log.WithField("cgroupPath", opts.CgroupPath).Debug("starting proc limiting")
 
-		_, err := v2.NewManager(basePath, filepath.Join("/", cgroupPath), c.limits)
+		_, err := v2.NewManager(opts.BasePath, filepath.Join("/", opts.CgroupPath), c.limits)
 		if err != nil {
-			log.WithError(err).WithField("basePath", basePath).WithField("cgroupPath", cgroupPath).WithField("limits", c.limits).Error("cannot write proc limits")
+			log.WithError(err).WithFields(log.OWI("", "", opts.InstanceId)).WithField("basePath", opts.BasePath).WithField("cgroupPath", opts.CgroupPath).WithField("limits", c.limits).Error("cannot write proc limits")
 		}
 
 		for {
 			select {
 			case <-update:
-				_, err := v2.NewManager(basePath, filepath.Join("/", cgroupPath), c.limits)
+				_, err := v2.NewManager(opts.BasePath, filepath.Join("/", opts.CgroupPath), c.limits)
 				if err != nil {
-					log.WithError(err).WithField("basePath", basePath).WithField("cgroupPath", cgroupPath).WithField("limits", c.limits).Error("cannot write proc limits")
+					log.WithError(err).WithFields(log.OWI("", "", opts.InstanceId)).WithField("basePath", opts.BasePath).WithField("cgroupPath", opts.CgroupPath).WithField("limits", c.limits).Error("cannot write proc limits")
 				}
 			case <-ctx.Done():
 				return

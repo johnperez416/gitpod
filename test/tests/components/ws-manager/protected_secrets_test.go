@@ -1,13 +1,12 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package wsmanager
 
 import (
 	"context"
 	"fmt"
-	"net/rpc"
 	"strings"
 	"testing"
 	"time"
@@ -28,8 +27,10 @@ const (
 )
 
 func TestProtectedSecrets(t *testing.T) {
-	f := features.New("protected_secrets").WithLabel("component", "ws-manager").Assess("can use protected secrets", func(_ context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	f := features.New("protected_secrets").WithLabel("component", "ws-manager").Assess("can use protected secrets", func(testCtx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		t.Parallel()
+
+		ctx, cancel := context.WithTimeout(testCtx, 5*time.Minute)
 		defer cancel()
 
 		api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
@@ -38,13 +39,10 @@ func TestProtectedSecrets(t *testing.T) {
 		})
 
 		swr := func(req *wsmanapi.StartWorkspaceRequest) error {
-			req.Spec.FeatureFlags = []wsmanapi.WorkspaceFeatureFlag{wsmanapi.WorkspaceFeatureFlag_PROTECTED_SECRETS}
-			req.Spec.Envvars = []*wsmanapi.EnvironmentVariable{
-				{
-					Name:  SECRET_NAME,
-					Value: SECRET_VALUE,
-				},
-			}
+			req.Spec.Envvars = append(req.Spec.Envvars, &wsmanapi.EnvironmentVariable{
+				Name:  SECRET_NAME,
+				Value: SECRET_VALUE,
+			})
 
 			req.Spec.Initializer = &csapi.WorkspaceInitializer{
 				Spec: &csapi.WorkspaceInitializer_Git{
@@ -65,7 +63,7 @@ func TestProtectedSecrets(t *testing.T) {
 			t.Fatalf("cannot launch a workspace: %q", err)
 		}
 
-		defer func() {
+		t.Cleanup(func() {
 			sctx, scancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer scancel()
 
@@ -76,7 +74,7 @@ func TestProtectedSecrets(t *testing.T) {
 			if err != nil {
 				t.Errorf("cannot stop workspace: %q", err)
 			}
-		}()
+		})
 
 		k8sClient := cfg.Client()
 		var wsPod corev1.Pod
@@ -100,7 +98,7 @@ func TestProtectedSecrets(t *testing.T) {
 		integration.DeferCloser(t, closer)
 		defer rsa.Close()
 
-		return ctx
+		return testCtx
 	}).Feature()
 
 	testEnv.Test(t, f)
@@ -122,15 +120,16 @@ func assertEnvSuppliedBySecret(t *testing.T, wsPod *corev1.Pod, secretEnv string
 					t.Fatalf("environment variable value is not supplied by secret")
 				}
 
-				if env.ValueFrom.SecretKeyRef.Name != wsPod.Name {
-					t.Fatalf("expected environment variable values are not supplied by secret %s", wsPod.Name)
+				expectedName := fmt.Sprintf("%s-env", strings.TrimPrefix(wsPod.Name, "ws-"))
+				if env.ValueFrom.SecretKeyRef.Name != expectedName {
+					t.Fatalf("expected environment variable values are not supplied by secret %s", expectedName)
 				}
 			}
 		}
 	}
 }
 
-func assertEnvAvailableInWs(t *testing.T, rsa *rpc.Client) {
+func assertEnvAvailableInWs(t *testing.T, rsa *integration.RpcClient) {
 	var grepResp agent.ExecResponse
 	err := rsa.Call("WorkspaceAgent.Exec", &agent.ExecRequest{
 		Dir:     prebuildLogPath,

@@ -1,6 +1,6 @@
 // Copyright (c) 2021 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package proxy
 
@@ -9,6 +9,7 @@ import (
 
 	"github.com/gitpod-io/gitpod/common-go/baseserver"
 	"github.com/gitpod-io/gitpod/installer/pkg/common"
+	configv1 "github.com/gitpod-io/gitpod/installer/pkg/config/v1"
 	"github.com/gitpod-io/gitpod/installer/pkg/config/v1/experimental"
 
 	corev1 "k8s.io/api/core/v1"
@@ -69,6 +70,16 @@ func service(ctx *common.RenderContext) ([]runtime.Object, error) {
 			ContainerPort: baseserver.BuiltinMetricsPort,
 			ServicePort:   baseserver.BuiltinMetricsPort,
 		},
+		{
+			Name:          ContainerAnalyticsName,
+			ContainerPort: ContainerAnalyticsPort,
+			ServicePort:   ContainerAnalyticsPort,
+		},
+		{
+			Name:          ContainerConfigcatName,
+			ContainerPort: ContainerConfigcatPort,
+			ServicePort:   ContainerConfigcatPort,
+		},
 	}
 	if ctx.Config.SSHGatewayHostKey != nil {
 		ports = append(ports, common.ServicePort{
@@ -83,7 +94,12 @@ func service(ctx *common.RenderContext) ([]runtime.Object, error) {
 		if serviceType == corev1.ServiceTypeLoadBalancer {
 			service.Spec.LoadBalancerIP = loadBalancerIP
 
-			service.Annotations["external-dns.alpha.kubernetes.io/hostname"] = fmt.Sprintf("%s,*.%s,*.ws.%s", ctx.Config.Domain, ctx.Config.Domain, ctx.Config.Domain)
+			installationShortNameSuffix := ""
+			if ctx.Config.Metadata.InstallationShortname != "" && ctx.Config.Metadata.InstallationShortname != configv1.InstallationShortNameOldDefault {
+				installationShortNameSuffix = "-" + ctx.Config.Metadata.InstallationShortname
+			}
+
+			service.Annotations["external-dns.alpha.kubernetes.io/hostname"] = fmt.Sprintf("%s,*.%s,*.ws%s.%s", ctx.Config.Domain, ctx.Config.Domain, installationShortNameSuffix, ctx.Config.Domain)
 			service.Annotations["cloud.google.com/neg"] = `{"exposed_ports": {"80":{},"443": {}}}`
 		}
 

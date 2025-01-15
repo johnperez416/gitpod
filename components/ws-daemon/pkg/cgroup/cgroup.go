@@ -1,11 +1,12 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package cgroup
 
 import (
 	"context"
+	"errors"
 
 	"github.com/gitpod-io/gitpod/common-go/cgroups"
 	"github.com/gitpod-io/gitpod/common-go/log"
@@ -79,18 +80,31 @@ func (host *PluginHost) WorkspaceAdded(ctx context.Context, ws *dispatch.Workspa
 		return xerrors.Errorf("no dispatch available")
 	}
 
-	cgroupPath, err := disp.Runtime.ContainerCGroupPath(context.Background(), ws.ContainerID)
+	cgroupPath, err := disp.Runtime.ContainerCGroupPath(ctx, ws.ContainerID)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
 		return xerrors.Errorf("cannot get cgroup path for container %s: %w", ws.ContainerID, err)
+	}
+
+	opts := &PluginOptions{
+		BasePath:    host.CGroupBasePath,
+		CgroupPath:  cgroupPath,
+		InstanceId:  ws.InstanceID,
+		Annotations: ws.Pod.Annotations,
 	}
 
 	for _, plg := range host.Plugins {
 		if plg.Type() != host.CGroupVersion {
 			continue
 		}
+		dispatch.GetDispatchWaitGroup(ctx).Add(1)
 
 		go func(plg Plugin) {
-			err := plg.Apply(ctx, host.CGroupBasePath, cgroupPath)
+			defer dispatch.GetDispatchWaitGroup(ctx).Done()
+
+			err := plg.Apply(ctx, opts)
 			if err == context.Canceled || err == context.DeadlineExceeded {
 				err = nil
 			}
@@ -109,7 +123,7 @@ func (host *PluginHost) WorkspaceAdded(ctx context.Context, ws *dispatch.Workspa
 type Plugin interface {
 	Name() string
 	Type() Version
-	Apply(ctx context.Context, basePath, cgroupPath string) error
+	Apply(ctx context.Context, options *PluginOptions) error
 }
 
 type Version int
@@ -118,3 +132,10 @@ const (
 	Version1 Version = iota
 	Version2
 )
+
+type PluginOptions struct {
+	BasePath    string
+	CgroupPath  string
+	InstanceId  string
+	Annotations map[string]string
+}

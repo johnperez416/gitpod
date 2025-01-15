@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=1091
 
 set -euo pipefail
 
@@ -6,18 +7,19 @@ SCRIPT_PATH=$(realpath "$(dirname "$0")")
 
 # shellcheck source=../lib/common.sh
 source "$(realpath "${SCRIPT_PATH}/../lib/common.sh")"
-# shellcheck source=../../util/preview-name-from-branch.sh
-source "$(realpath "${SCRIPT_PATH}/../../util/preview-name-from-branch.sh")"
 
 import "ensure-gcloud-auth.sh"
 
+leeway run dev/preview:configure-workspace
 ensure_gcloud_auth
 
-VERSION="$(preview-name-from-branch)-dev"
+if [[ "${VERSION:-}" == "" ]]; then
+    VERSION="$(previewctl get name)-dev-$(date +%F_T%H-%M-%S)"
+    log_info "VERSION is not set - using $VERSION"
+    echo "$VERSION" > /tmp/local-dev-version
+fi
 
 leeway build \
-    -DSEGMENT_IO_TOKEN="" \
     -Dversion="${VERSION}" \
-    --dont-retag \
     --dont-test \
-    install/installer:app
+    dev/preview:deploy-dependencies

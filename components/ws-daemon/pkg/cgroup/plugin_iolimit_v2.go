@@ -1,11 +1,12 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package cgroup
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,7 +38,7 @@ func NewIOLimiterV2(writeBytesPerSecond, readBytesPerSecond, writeIOPs, readIOPs
 func (c *IOLimiterV2) Name() string  { return "iolimiter-v2" }
 func (c *IOLimiterV2) Type() Version { return Version2 }
 
-func (c *IOLimiterV2) Apply(ctx context.Context, basePath, cgroupPath string) error {
+func (c *IOLimiterV2) Apply(ctx context.Context, opts *PluginOptions) error {
 	update := make(chan struct{}, 1)
 	go func() {
 		// TODO(cw): this Go-routine will leak per workspace, until we update config or restart ws-daemon
@@ -57,29 +58,29 @@ func (c *IOLimiterV2) Apply(ctx context.Context, basePath, cgroupPath string) er
 	}()
 
 	go func() {
-		log.WithField("cgroupPath", cgroupPath).Debug("starting io limiting")
+		log.WithFields(log.OWI("", "", opts.InstanceId)).WithField("cgroupPath", opts.CgroupPath).Debug("starting io limiting")
 
-		_, err := v2.NewManager(basePath, filepath.Join("/", cgroupPath), c.limits)
+		_, err := v2.NewManager(opts.BasePath, filepath.Join("/", opts.CgroupPath), c.limits)
 		if err != nil {
-			log.WithError(err).WithField("basePath", basePath).WithField("cgroupPath", cgroupPath).WithField("limits", c.limits).Error("cannot write IO limits")
+			log.WithError(err).WithFields(log.OWI("", "", opts.InstanceId)).WithField("basePath", opts.BasePath).WithField("cgroupPath", opts.CgroupPath).WithField("limits", c.limits).Warn("cannot write IO limits")
 		}
 
 		for {
 			select {
 			case <-update:
-				_, err := v2.NewManager(basePath, filepath.Join("/", cgroupPath), c.limits)
+				_, err := v2.NewManager(opts.BasePath, filepath.Join("/", opts.CgroupPath), c.limits)
 				if err != nil {
-					log.WithError(err).WithField("basePath", basePath).WithField("cgroupPath", cgroupPath).WithField("limits", c.limits).Error("cannot write IO limits")
+					log.WithError(err).WithFields(log.OWI("", "", opts.InstanceId)).WithField("basePath", opts.BasePath).WithField("cgroupPath", opts.CgroupPath).WithField("limits", c.limits).Error("cannot write IO limits")
 				}
 			case <-ctx.Done():
 				// Prior to shutting down though, we need to reset the IO limits to ensure we don't have
 				// processes stuck in the uninterruptable "D" (disk sleep) state. This would prevent the
 				// workspace pod from shutting down.
-				_, err := v2.NewManager(basePath, filepath.Join("/", cgroupPath), &v2.Resources{})
+				_, err := v2.NewManager(opts.BasePath, filepath.Join("/", opts.CgroupPath), &v2.Resources{})
 				if err != nil {
-					log.WithError(err).WithField("cgroupPath", cgroupPath).Error("cannot write IO limits")
+					log.WithError(err).WithFields(log.OWI("", "", opts.InstanceId)).WithField("cgroupPath", opts.CgroupPath).Error("cannot write IO limits")
 				}
-				log.WithField("cgroupPath", cgroupPath).Debug("stopping io limiting")
+				log.WithFields(log.OWI("", "", opts.InstanceId)).WithField("cgroupPath", opts.CgroupPath).Debug("stopping io limiting")
 				return
 			}
 		}
@@ -142,4 +143,28 @@ func buildV2Limits(writeBytesPerSecond, readBytesPerSecond, writeIOPs, readIOPs 
 	log.WithField("resources", resources).Debug("cgroups v2 limits")
 
 	return resources
+}
+
+// TODO: enable custom configuration
+var blockDevices = []string{"dm*", "sd*", "md*", "nvme*"}
+
+func buildDevices() []string {
+	var devices []string
+	for _, wc := range blockDevices {
+		matches, err := filepath.Glob(filepath.Join("/sys/block", wc, "dev"))
+		if err != nil {
+			log.WithField("wc", wc).Warn("cannot glob devices")
+			continue
+		}
+
+		for _, dev := range matches {
+			fc, err := os.ReadFile(dev)
+			if err != nil {
+				log.WithField("dev", dev).WithError(err).Error("cannot read device file")
+			}
+			devices = append(devices, strings.TrimSpace(string(fc)))
+		}
+	}
+
+	return devices
 }

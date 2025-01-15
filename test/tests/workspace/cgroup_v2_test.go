@@ -1,6 +1,6 @@
 // Copyright (c) 2021 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package workspace
 
@@ -19,14 +19,17 @@ import (
 
 	agent "github.com/gitpod-io/gitpod/test/pkg/agent/workspace/api"
 	"github.com/gitpod-io/gitpod/test/pkg/integration"
-	"github.com/gitpod-io/gitpod/test/pkg/integration/common"
+	"github.com/gitpod-io/gitpod/test/pkg/report"
 )
 
 func TestCgroupV2(t *testing.T) {
 	f := features.New("cgroup v2").
 		WithLabel("component", "workspace").
-		Assess("it should create a new cgroup when cgroup v2 is enabled", func(_ context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		Assess("it should have cgroup v2 enabled and create a new cgroup", func(testCtx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			report.SetupReport(t, report.FeatureResourceLimit, "this is the test for cgroup v2")
+			t.Parallel()
+
+			ctx, cancel := context.WithTimeout(testCtx, 5*time.Minute)
 			defer cancel()
 
 			api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
@@ -58,12 +61,12 @@ func TestCgroupV2(t *testing.T) {
 			defer rsa.Close()
 			integration.DeferCloser(t, closer)
 
-			cgv2, err := common.IsCgroupV2(rsa)
+			cgv2, err := integration.IsCgroupV2(rsa)
 			if err != nil {
 				t.Fatalf("unexpected error checking cgroup v2: %v", err)
 			}
 			if !cgv2 {
-				t.Skip("This test only works for cgroup v2")
+				t.Fatalf("expected cgroup v2 to be enabled")
 			}
 
 			cgroupBase := "/sys/fs/cgroup/test"
@@ -73,7 +76,7 @@ func TestCgroupV2(t *testing.T) {
 				Command: "bash",
 				Args: []string{
 					"-c",
-					fmt.Sprintf("sudo mkdir %s", cgroupBase),
+					fmt.Sprintf("if [ ! -e %s ]; then sudo mkdir %s; fi", cgroupBase, cgroupBase),
 				},
 			}, &respNewCgroup)
 			if err != nil {
@@ -118,7 +121,7 @@ func TestCgroupV2(t *testing.T) {
 				}
 			}
 
-			return ctx
+			return testCtx
 		}).
 		Feature()
 

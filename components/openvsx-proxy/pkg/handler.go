@@ -1,6 +1,6 @@
 // Copyright (c) 2021 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package pkg
 
@@ -43,8 +43,19 @@ func (o *OpenVSXProxy) Handler(p *httputil.ReverseProxy) func(http.ResponseWrite
 			"request_content_length": strconv.FormatInt(r.ContentLength, 10),
 		}
 
-		log.WithFields(logFields).Info("handling request")
+		log.WithFields(logFields).Debug("handling request")
 		r = r.WithContext(context.WithValue(r.Context(), REQUEST_ID_CTX, reqid))
+
+		upstream := o.GetUpstreamUrl(r)
+		r = r.WithContext(context.WithValue(r.Context(), UPSTREAM_CTX, upstream))
+
+		if o.IsDisabledCache(upstream) {
+			log.WithFields(logFields).WithField("upstream", upstream.String()).Debug("go without cache")
+			p.ServeHTTP(rw, r)
+			o.finishLog(logFields, start, false, false)
+			o.metrics.DurationRequestProcessingHistogram.Observe(time.Since(start).Seconds())
+			return
+		}
 
 		key, err := o.key(r)
 		if err != nil {
@@ -101,7 +112,7 @@ func (o *OpenVSXProxy) Handler(p *httputil.ReverseProxy) func(http.ResponseWrite
 		}
 
 		duration := time.Since(start)
-		log.WithFields(logFields).WithFields(o.DurationLogFields(duration)).Info("processing request finished")
+		log.WithFields(logFields).WithFields(o.DurationLogFields(duration)).Debug("processing request finished")
 		o.metrics.DurationRequestProcessingHistogram.Observe(duration.Seconds())
 
 		p.ServeHTTP(rw, r)

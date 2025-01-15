@@ -1,27 +1,25 @@
 // Copyright (c) 2020 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"os/exec"
 	"syscall"
 	"time"
 
-	"google.golang.org/grpc/credentials/insecure"
+	"golang.org/x/xerrors"
+	"k8s.io/klog/v2"
 
+	"github.com/bombsimon/logrusr/v2"
 	"github.com/heptiolabs/healthcheck"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/health/grpc_health_v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/gitpod-io/gitpod/common-go/baseserver"
-	common_grpc "github.com/gitpod-io/gitpod/common-go/grpc"
 	"github.com/gitpod-io/gitpod/common-go/log"
 	"github.com/gitpod-io/gitpod/common-go/watch"
 	"github.com/gitpod-io/gitpod/ws-daemon/pkg/config"
@@ -41,25 +39,31 @@ var runCmd = &cobra.Command{
 			log.WithError(err).Fatal("Cannot read configuration. Maybe missing --config?")
 		}
 
+		createLVMDevices()
+
+		baseLogger := logrusr.New(log.Log)
+		ctrl.SetLogger(baseLogger)
+		// Set the logger used by k8s (e.g. client-go).
+		klog.SetLogger(baseLogger)
+
+		dmn, err := daemon.NewDaemon(cfg.Daemon)
+		if err != nil {
+			log.WithError(err).Fatal("Cannot create daemon.")
+		}
+
 		health := healthcheck.NewHandler()
 		srv, err := baseserver.New(grpcServerName,
 			baseserver.WithGRPC(&cfg.Service),
 			baseserver.WithHealthHandler(health),
+			baseserver.WithMetricsRegistry(dmn.MetricsRegistry()),
 			baseserver.WithVersion(Version),
 		)
 		if err != nil {
 			log.WithError(err).Fatal("Cannot set up server.")
 		}
 
-		dmn, err := daemon.NewDaemon(cfg.Daemon, prometheus.WrapRegistererWithPrefix("gitpod_ws_daemon_", srv.MetricsRegistry()))
-		if err != nil {
-			log.WithError(err).Fatal("Cannot create daemon.")
-		}
-
-		health.AddReadinessCheck("grpc-server", grpcProbe(cfg.Service))
 		health.AddReadinessCheck("ws-daemon", dmn.ReadinessProbe())
-
-		dmn.Register(srv.GRPC())
+		health.AddReadinessCheck("disk-space", freeDiskSpace(cfg.Daemon))
 
 		err = dmn.Start()
 		if err != nil {
@@ -104,41 +108,36 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 }
 
-func grpcProbe(cfg baseserver.ServerConfiguration) func() error {
+// createLVMDevices creates LVM logical volume special files missing when we run inside a container.
+// Without this devices we cannot enforce disk quotas. In installations without LVM this is a NOOP.
+func createLVMDevices() {
+	cmd := exec.Command("/usr/sbin/vgmknodes")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.WithError(err).WithField("out", string(out)).Error("cannot recreate LVM files in /dev/mapper")
+	}
+}
+
+func freeDiskSpace(cfg daemon.Config) func() error {
 	return func() error {
-		creds := insecure.NewCredentials()
-		if cfg.TLS != nil && cfg.TLS.CertPath != "" {
-			tlsConfig, err := common_grpc.ClientAuthTLSConfig(
-				cfg.TLS.CAPath, cfg.TLS.CertPath, cfg.TLS.KeyPath,
-				common_grpc.WithSetRootCAs(true),
-				common_grpc.WithServerName(grpcServerName),
-			)
-			if err != nil {
-				return fmt.Errorf("cannot load ws-daemon certificate: %w", err)
+		var diskDiskAvailable uint64 = 1
+		for _, loc := range cfg.DiskSpaceGuard.Locations {
+			if loc.Path == cfg.Content.WorkingArea {
+				diskDiskAvailable = loc.MinBytesAvail
 			}
-
-			creds = credentials.NewTLS(tlsConfig)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		conn, err := grpc.DialContext(ctx, cfg.Address, grpc.WithTransportCredentials(creds))
+		var stat syscall.Statfs_t
+		err := syscall.Statfs(cfg.Content.WorkingArea, &stat)
 		if err != nil {
-			return err
-		}
-		defer conn.Close()
-
-		client := grpc_health_v1.NewHealthClient(conn)
-		check, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
-		if err != nil {
-			return err
+			return xerrors.Errorf("cannot get disk space details from path %s: %w", cfg.Content.WorkingArea, err)
 		}
 
-		if check.Status == grpc_health_v1.HealthCheckResponse_SERVING {
-			return nil
+		diskAvailable := stat.Bavail * uint64(stat.Bsize) * (1024 * 1024 * 1024) // In GB
+		if diskAvailable < diskDiskAvailable {
+			return xerrors.Errorf("not enough disk available (%v)", diskAvailable)
 		}
 
-		return fmt.Errorf("grpc service not ready")
+		return nil
 	}
 }
