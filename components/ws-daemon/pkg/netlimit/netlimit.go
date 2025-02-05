@@ -1,11 +1,12 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package netlimit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -48,10 +49,12 @@ func NewConnLimiter(config Config, prom prometheus.Registerer) *ConnLimiter {
 
 	s.config = config
 
-	prom.MustRegister(
-		s.droppedBytes,
-		s.droppedPackets,
-	)
+	if config.Enabled {
+		prom.MustRegister(
+			s.droppedBytes,
+			s.droppedPackets,
+		)
+	}
 
 	return s
 }
@@ -121,29 +124,39 @@ func (n *ConnLimiter) GetConnectionDropCounter(pid uint64) (*nftables.CounterObj
 }
 
 func (c *ConnLimiter) limitWorkspace(ctx context.Context, ws *dispatch.Workspace) error {
-	log.WithFields(ws.OWI()).Infof("will limit network connections")
-
 	disp := dispatch.GetFromContext(ctx)
 	if disp == nil {
 		return fmt.Errorf("no dispatch available")
 	}
 
-	pid, err := disp.Runtime.ContainerPID(context.Background(), ws.ContainerID)
+	pid, err := disp.Runtime.ContainerPID(ctx, ws.ContainerID)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
 		return fmt.Errorf("could not get pid for container %s of workspace %s", ws.ContainerID, ws.WorkspaceID)
 	}
 
 	err = nsinsider.Nsinsider(ws.InstanceID, int(pid), func(cmd *exec.Cmd) {
 		cmd.Args = append(cmd.Args, "setup-connection-limit", "--limit", strconv.Itoa(int(c.config.ConnectionsPerMinute)),
 			"--bucketsize", strconv.Itoa(int(c.config.BucketSize)))
+		if c.config.Enforce {
+			cmd.Args = append(cmd.Args, "--enforce")
+		}
 	}, nsinsider.EnterMountNS(false), nsinsider.EnterNetNS(true))
 	if err != nil {
+		if errors.Is(context.Cause(ctx), context.Canceled) {
+			return nil
+		}
 		log.WithError(err).WithFields(ws.OWI()).Error("cannot enable connection limiting")
 		return err
 	}
 	c.limited[ws.InstanceID] = struct{}{}
 
+	dispatch.GetDispatchWaitGroup(ctx).Add(1)
 	go func(*dispatch.Workspace) {
+		defer dispatch.GetDispatchWaitGroup(ctx).Done()
+
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 
@@ -152,7 +165,7 @@ func (c *ConnLimiter) limitWorkspace(ctx context.Context, ws *dispatch.Workspace
 			case <-ticker.C:
 				counter, err := c.GetConnectionDropCounter(pid)
 				if err != nil {
-					log.WithError(err).Errorf("could not get connection drop stats for %s", ws.WorkspaceID)
+					log.WithFields(ws.OWI()).WithError(err).Warnf("could not get connection drop stats")
 					continue
 				}
 
@@ -170,4 +183,12 @@ func (c *ConnLimiter) limitWorkspace(ctx context.Context, ws *dispatch.Workspace
 	}(ws)
 
 	return nil
+}
+
+func (c *ConnLimiter) Update(config Config) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.config = config
+	log.WithField("config", config).Info("updating network connection limits")
 }

@@ -1,6 +1,6 @@
 // Copyright (c) 2020 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package workspace
 
@@ -15,6 +15,7 @@ import (
 
 	agent "github.com/gitpod-io/gitpod/test/pkg/agent/workspace/api"
 	"github.com/gitpod-io/gitpod/test/pkg/integration"
+	"github.com/gitpod-io/gitpod/test/pkg/report"
 )
 
 func TestWorkspaceInstrumentation(t *testing.T) {
@@ -35,10 +36,15 @@ func TestWorkspaceInstrumentation(t *testing.T) {
 
 	f := features.New("instrumentation").
 		WithLabel("component", "server").
-		Assess("it can instrument a workspace", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("it can instrument a workspace", func(testCtx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			for _, test := range tests {
+				test := test
 				t.Run(test.ContextURL, func(t *testing.T) {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					report.SetupReport(t, report.FeatureExample, "this is the example test for instrumenting a workspace")
+
+					t.Parallel()
+
+					ctx, cancel := context.WithTimeout(testCtx, time.Duration(5*len(tests))*time.Minute)
 					defer cancel()
 
 					api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
@@ -56,7 +62,7 @@ func TestWorkspaceInstrumentation(t *testing.T) {
 						t.Fatal(err)
 					}
 
-					defer func() {
+					t.Cleanup(func() {
 						sctx, scancel := context.WithTimeout(context.Background(), 5*time.Minute)
 						defer scancel()
 
@@ -67,7 +73,7 @@ func TestWorkspaceInstrumentation(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-					}()
+					})
 
 					rsa, closer, err := integration.Instrument(integration.ComponentWorkspace, "workspace", cfg.Namespace(), kubeconfig, cfg.Client(), integration.WithInstanceID(nfo.LatestInstance.ID))
 					if err != nil {
@@ -89,7 +95,7 @@ func TestWorkspaceInstrumentation(t *testing.T) {
 				})
 			}
 
-			return ctx
+			return testCtx
 		}).
 		Feature()
 
@@ -99,8 +105,10 @@ func TestWorkspaceInstrumentation(t *testing.T) {
 func TestLaunchWorkspaceDirectly(t *testing.T) {
 	f := features.New("workspace").
 		WithLabel("component", "server").
-		Assess("it can run workspace tasks", func(_ context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		Assess("it can run workspace tasks", func(testCtx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			t.Parallel()
+
+			ctx, cancel := context.WithTimeout(testCtx, 5*time.Minute)
 			defer cancel()
 
 			api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
@@ -113,7 +121,7 @@ func TestLaunchWorkspaceDirectly(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			defer func() {
+			t.Cleanup(func() {
 				sctx, scancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				defer scancel()
 
@@ -124,9 +132,9 @@ func TestLaunchWorkspaceDirectly(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			}()
+			})
 
-			return ctx
+			return testCtx
 		}).
 		Feature()
 

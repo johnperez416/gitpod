@@ -1,12 +1,11 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package wsmanager
 
 import (
 	"context"
-	"net/rpc"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,7 +17,6 @@ import (
 	csapi "github.com/gitpod-io/gitpod/content-service/api"
 	agent "github.com/gitpod-io/gitpod/test/pkg/agent/workspace/api"
 	"github.com/gitpod-io/gitpod/test/pkg/integration"
-	"github.com/gitpod-io/gitpod/test/pkg/integration/common"
 	wsmanapi "github.com/gitpod-io/gitpod/ws-manager/api"
 )
 
@@ -41,10 +39,10 @@ var repos = []struct {
 		CheckoutLocation: "gitpod",
 	},
 	{
-		RemoteUri:        "https://github.com/gitpod-io/website",
+		RemoteUri:        "https://github.com/gitpod-io/workspace-images",
 		CloneTarget:      "main",
 		ExpectedBranch:   "main",
-		CheckoutLocation: "website",
+		CheckoutLocation: "workspace-images",
 	},
 	{
 		RemoteUri:        "https://github.com/gitpod-io/dazzle",
@@ -67,8 +65,10 @@ var repos = []struct {
 }
 
 func TestMultiRepoWorkspaceSuccess(t *testing.T) {
-	f := features.New("multi-repo").WithLabel("component", "ws-manager").Assess("can create multi repo workspace", func(_ context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	f := features.New("multi-repo").WithLabel("component", "ws-manager").Assess("can create multi repo workspace", func(testCtx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		t.Parallel()
+
+		ctx, cancel := context.WithTimeout(testCtx, 5*time.Minute)
 		defer cancel()
 
 		api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
@@ -113,7 +113,7 @@ func TestMultiRepoWorkspaceSuccess(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		defer func() {
+		t.Cleanup(func() {
 			sctx, scancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer scancel()
 
@@ -124,7 +124,7 @@ func TestMultiRepoWorkspaceSuccess(t *testing.T) {
 			if err != nil {
 				t.Errorf("cannot stop workspace: %q", err)
 			}
-		}()
+		})
 
 		rsa, closer, err := integration.Instrument(integration.ComponentWorkspace, "workspace", cfg.Namespace(), kubeconfig, cfg.Client(),
 			integration.WithInstanceID(ws.Req.Id),
@@ -140,13 +140,13 @@ func TestMultiRepoWorkspaceSuccess(t *testing.T) {
 
 		assertRepositories(t, rsa)
 
-		return ctx
+		return testCtx
 	}).Feature()
 
 	testEnv.Test(t, f)
 }
 
-func assertRepositories(t *testing.T, rsa *rpc.Client) {
+func assertRepositories(t *testing.T, rsa *integration.RpcClient) {
 	var ls agent.ListDirResponse
 	err := rsa.Call("WorkspaceAgent.ListDir", &agent.ListDirRequest{
 		Dir: "/workspace",
@@ -181,7 +181,7 @@ func assertRepositories(t *testing.T, rsa *rpc.Client) {
 		}
 	}
 
-	git := common.Git(rsa)
+	git := integration.Git(rsa)
 
 	for k, v := range expected {
 		if !v.Cloned {

@@ -1,7 +1,7 @@
 /**
- * Copyright (c) 2022 Gitpod GmbH. All rights reserved.
+ * Copyright (c) 2024 Gitpod GmbH. All rights reserved.
  * Licensed under the GNU Affero General Public License (AGPL).
- * See License-AGPL.txt in the project root for license information.
+ * See License.AGPL.txt in the project root for license information.
  */
 
 // package: wsman
@@ -290,6 +290,8 @@ export class MarkActiveRequest extends jspb.Message {
     setId(value: string): MarkActiveRequest;
     getClosed(): boolean;
     setClosed(value: boolean): MarkActiveRequest;
+    getIgnoreIfActive(): boolean;
+    setIgnoreIfActive(value: boolean): MarkActiveRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): MarkActiveRequest.AsObject;
@@ -305,6 +307,7 @@ export namespace MarkActiveRequest {
     export type AsObject = {
         id: string,
         closed: boolean,
+        ignoreIfActive: boolean,
     }
 }
 
@@ -330,6 +333,8 @@ export class SetTimeoutRequest extends jspb.Message {
     setId(value: string): SetTimeoutRequest;
     getDuration(): string;
     setDuration(value: string): SetTimeoutRequest;
+    getType(): TimeoutType;
+    setType(value: TimeoutType): SetTimeoutRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): SetTimeoutRequest.AsObject;
@@ -345,6 +350,7 @@ export namespace SetTimeoutRequest {
     export type AsObject = {
         id: string,
         duration: string,
+        type: TimeoutType,
     }
 }
 
@@ -501,6 +507,8 @@ export class DeleteVolumeSnapshotRequest extends jspb.Message {
     setVolumeHandle(value: string): DeleteVolumeSnapshotRequest;
     getSoftDelete(): boolean;
     setSoftDelete(value: boolean): DeleteVolumeSnapshotRequest;
+    getWsType(): WorkspaceType;
+    setWsType(value: WorkspaceType): DeleteVolumeSnapshotRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): DeleteVolumeSnapshotRequest.AsObject;
@@ -517,6 +525,7 @@ export namespace DeleteVolumeSnapshotRequest {
         id: string,
         volumeHandle: string,
         softDelete: boolean,
+        wsType: WorkspaceType,
     }
 }
 
@@ -690,12 +699,8 @@ export namespace WorkspaceStatus {
 export class IDEImage extends jspb.Message {
     getWebRef(): string;
     setWebRef(value: string): IDEImage;
-    getDesktopRef(): string;
-    setDesktopRef(value: string): IDEImage;
     getSupervisorRef(): string;
     setSupervisorRef(value: string): IDEImage;
-    getDesktopPluginRef(): string;
-    setDesktopPluginRef(value: string): IDEImage;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): IDEImage.AsObject;
@@ -710,17 +715,13 @@ export class IDEImage extends jspb.Message {
 export namespace IDEImage {
     export type AsObject = {
         webRef: string,
-        desktopRef: string,
         supervisorRef: string,
-        desktopPluginRef: string,
     }
 }
 
 export class WorkspaceSpec extends jspb.Message {
     getWorkspaceImage(): string;
     setWorkspaceImage(value: string): WorkspaceSpec;
-    getDeprecatedIdeImage(): string;
-    setDeprecatedIdeImage(value: string): WorkspaceSpec;
     getHeadless(): boolean;
     setHeadless(value: boolean): WorkspaceSpec;
     getUrl(): string;
@@ -740,6 +741,12 @@ export class WorkspaceSpec extends jspb.Message {
     setIdeImage(value?: IDEImage): WorkspaceSpec;
     getClass(): string;
     setClass(value: string): WorkspaceSpec;
+    clearIdeImageLayersList(): void;
+    getIdeImageLayersList(): Array<string>;
+    setIdeImageLayersList(value: Array<string>): WorkspaceSpec;
+    addIdeImageLayers(value: string, index?: number): string;
+    getClosedTimeout(): string;
+    setClosedTimeout(value: string): WorkspaceSpec;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): WorkspaceSpec.AsObject;
@@ -754,7 +761,6 @@ export class WorkspaceSpec extends jspb.Message {
 export namespace WorkspaceSpec {
     export type AsObject = {
         workspaceImage: string,
-        deprecatedIdeImage: string,
         headless: boolean,
         url: string,
         exposedPortsList: Array<PortSpec.AsObject>,
@@ -762,6 +768,8 @@ export namespace WorkspaceSpec {
         timeout: string,
         ideImage?: IDEImage.AsObject,
         pb_class: string,
+        ideImageLayersList: Array<string>,
+        closedTimeout: string,
     }
 }
 
@@ -772,6 +780,8 @@ export class PortSpec extends jspb.Message {
     setVisibility(value: PortVisibility): PortSpec;
     getUrl(): string;
     setUrl(value: string): PortSpec;
+    getProtocol(): PortProtocol;
+    setProtocol(value: PortProtocol): PortSpec;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): PortSpec.AsObject;
@@ -788,6 +798,7 @@ export namespace PortSpec {
         port: number,
         visibility: PortVisibility,
         url: string,
+        protocol: PortProtocol,
     }
 }
 
@@ -897,6 +908,11 @@ export class WorkspaceMetadata extends jspb.Message {
     getProject(): string | undefined;
     setProject(value: string): WorkspaceMetadata;
 
+    hasMetrics(): boolean;
+    clearMetrics(): void;
+    getMetrics(): WorkspaceMetadata.Metrics | undefined;
+    setMetrics(value?: WorkspaceMetadata.Metrics): WorkspaceMetadata;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): WorkspaceMetadata.AsObject;
     static toObject(includeInstance: boolean, msg: WorkspaceMetadata): WorkspaceMetadata.AsObject;
@@ -916,7 +932,56 @@ export namespace WorkspaceMetadata {
         annotationsMap: Array<[string, string]>,
         team?: string,
         project?: string,
+        metrics?: WorkspaceMetadata.Metrics.AsObject,
     }
+
+
+    export class ImageInfo extends jspb.Message {
+        getTotalSize(): number;
+        setTotalSize(value: number): ImageInfo;
+        getWorkspaceImageSize(): number;
+        setWorkspaceImageSize(value: number): ImageInfo;
+
+        serializeBinary(): Uint8Array;
+        toObject(includeInstance?: boolean): ImageInfo.AsObject;
+        static toObject(includeInstance: boolean, msg: ImageInfo): ImageInfo.AsObject;
+        static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+        static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+        static serializeBinaryToWriter(message: ImageInfo, writer: jspb.BinaryWriter): void;
+        static deserializeBinary(bytes: Uint8Array): ImageInfo;
+        static deserializeBinaryFromReader(message: ImageInfo, reader: jspb.BinaryReader): ImageInfo;
+    }
+
+    export namespace ImageInfo {
+        export type AsObject = {
+            totalSize: number,
+            workspaceImageSize: number,
+        }
+    }
+
+    export class Metrics extends jspb.Message {
+
+        hasImage(): boolean;
+        clearImage(): void;
+        getImage(): WorkspaceMetadata.ImageInfo | undefined;
+        setImage(value?: WorkspaceMetadata.ImageInfo): Metrics;
+
+        serializeBinary(): Uint8Array;
+        toObject(includeInstance?: boolean): Metrics.AsObject;
+        static toObject(includeInstance: boolean, msg: Metrics): Metrics.AsObject;
+        static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+        static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+        static serializeBinaryToWriter(message: Metrics, writer: jspb.BinaryWriter): void;
+        static deserializeBinary(bytes: Uint8Array): Metrics;
+        static deserializeBinaryFromReader(message: Metrics, reader: jspb.BinaryReader): Metrics;
+    }
+
+    export namespace Metrics {
+        export type AsObject = {
+            image?: WorkspaceMetadata.ImageInfo.AsObject,
+        }
+    }
+
 }
 
 export class WorkspaceRuntimeInfo extends jspb.Message {
@@ -971,8 +1036,6 @@ export namespace WorkspaceAuthentication {
 export class StartWorkspaceSpec extends jspb.Message {
     getWorkspaceImage(): string;
     setWorkspaceImage(value: string): StartWorkspaceSpec;
-    getDeprecatedIdeImage(): string;
-    setDeprecatedIdeImage(value: string): StartWorkspaceSpec;
     clearFeatureFlagsList(): void;
     getFeatureFlagsList(): Array<WorkspaceFeatureFlag>;
     setFeatureFlagsList(value: Array<WorkspaceFeatureFlag>): StartWorkspaceSpec;
@@ -1008,15 +1071,22 @@ export class StartWorkspaceSpec extends jspb.Message {
     setIdeImage(value?: IDEImage): StartWorkspaceSpec;
     getClass(): string;
     setClass(value: string): StartWorkspaceSpec;
-
-    hasVolumeSnapshot(): boolean;
-    clearVolumeSnapshot(): void;
-    getVolumeSnapshot(): VolumeSnapshotInfo | undefined;
-    setVolumeSnapshot(value?: VolumeSnapshotInfo): StartWorkspaceSpec;
     clearSshPublicKeysList(): void;
     getSshPublicKeysList(): Array<string>;
     setSshPublicKeysList(value: Array<string>): StartWorkspaceSpec;
     addSshPublicKeys(value: string, index?: number): string;
+    clearSysEnvvarsList(): void;
+    getSysEnvvarsList(): Array<EnvironmentVariable>;
+    setSysEnvvarsList(value: Array<EnvironmentVariable>): StartWorkspaceSpec;
+    addSysEnvvars(value?: EnvironmentVariable, index?: number): EnvironmentVariable;
+    clearIdeImageLayersList(): void;
+    getIdeImageLayersList(): Array<string>;
+    setIdeImageLayersList(value: Array<string>): StartWorkspaceSpec;
+    addIdeImageLayers(value: string, index?: number): string;
+    getClosedTimeout(): string;
+    setClosedTimeout(value: string): StartWorkspaceSpec;
+    getMaximumLifetime(): string;
+    setMaximumLifetime(value: string): StartWorkspaceSpec;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): StartWorkspaceSpec.AsObject;
@@ -1031,7 +1101,6 @@ export class StartWorkspaceSpec extends jspb.Message {
 export namespace StartWorkspaceSpec {
     export type AsObject = {
         workspaceImage: string,
-        deprecatedIdeImage: string,
         featureFlagsList: Array<WorkspaceFeatureFlag>,
         initializer?: content_service_api_initializer_pb.WorkspaceInitializer.AsObject,
         portsList: Array<PortSpec.AsObject>,
@@ -1042,8 +1111,11 @@ export namespace StartWorkspaceSpec {
         admission: AdmissionLevel,
         ideImage?: IDEImage.AsObject,
         pb_class: string,
-        volumeSnapshot?: VolumeSnapshotInfo.AsObject,
         sshPublicKeysList: Array<string>,
+        sysEnvvarsList: Array<EnvironmentVariable.AsObject>,
+        ideImageLayersList: Array<string>,
+        closedTimeout: string,
+        maximumLifetime: string,
     }
 }
 
@@ -1186,10 +1258,12 @@ export namespace DescribeClusterRequest {
 }
 
 export class DescribeClusterResponse extends jspb.Message {
-    clearWorkspaceclassesList(): void;
-    getWorkspaceclassesList(): Array<WorkspaceClass>;
-    setWorkspaceclassesList(value: Array<WorkspaceClass>): DescribeClusterResponse;
-    addWorkspaceclasses(value?: WorkspaceClass, index?: number): WorkspaceClass;
+    clearWorkspaceClassesList(): void;
+    getWorkspaceClassesList(): Array<WorkspaceClass>;
+    setWorkspaceClassesList(value: Array<WorkspaceClass>): DescribeClusterResponse;
+    addWorkspaceClasses(value?: WorkspaceClass, index?: number): WorkspaceClass;
+    getPreferredWorkspaceClass(): string;
+    setPreferredWorkspaceClass(value: string): DescribeClusterResponse;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): DescribeClusterResponse.AsObject;
@@ -1203,15 +1277,20 @@ export class DescribeClusterResponse extends jspb.Message {
 
 export namespace DescribeClusterResponse {
     export type AsObject = {
-        workspaceclassesList: Array<WorkspaceClass.AsObject>,
+        workspaceClassesList: Array<WorkspaceClass.AsObject>,
+        preferredWorkspaceClass: string,
     }
 }
 
 export class WorkspaceClass extends jspb.Message {
     getId(): string;
     setId(value: string): WorkspaceClass;
-    getDisplayname(): string;
-    setDisplayname(value: string): WorkspaceClass;
+    getDisplayName(): string;
+    setDisplayName(value: string): WorkspaceClass;
+    getDescription(): string;
+    setDescription(value: string): WorkspaceClass;
+    getCreditsPerMinute(): number;
+    setCreditsPerMinute(value: number): WorkspaceClass;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): WorkspaceClass.AsObject;
@@ -1226,7 +1305,9 @@ export class WorkspaceClass extends jspb.Message {
 export namespace WorkspaceClass {
     export type AsObject = {
         id: string,
-        displayname: string,
+        displayName: string,
+        description: string,
+        creditsPerMinute: number,
     }
 }
 
@@ -1234,6 +1315,11 @@ export enum StopWorkspacePolicy {
     NORMALLY = 0,
     IMMEDIATELY = 1,
     ABORT = 2,
+}
+
+export enum TimeoutType {
+    WORKSPACE_TIMEOUT = 0,
+    CLOSED_TIMEOUT = 1,
 }
 
 export enum AdmissionLevel {
@@ -1244,6 +1330,11 @@ export enum AdmissionLevel {
 export enum PortVisibility {
     PORT_VISIBILITY_PRIVATE = 0,
     PORT_VISIBILITY_PUBLIC = 1,
+}
+
+export enum PortProtocol {
+    PORT_PROTOCOL_HTTP = 0,
+    PORT_PROTOCOL_HTTPS = 1,
 }
 
 export enum WorkspaceConditionBool {
@@ -1265,11 +1356,9 @@ export enum WorkspacePhase {
 
 export enum WorkspaceFeatureFlag {
     NOOP = 0,
-    FULL_WORKSPACE_BACKUP = 4,
-    PERSISTENT_VOLUME_CLAIM = 7,
-    PROTECTED_SECRETS = 8,
-    WORKSPACE_CLASS_LIMITING = 9,
     WORKSPACE_CONNECTION_LIMITING = 10,
+    WORKSPACE_PSI = 11,
+    SSH_CA = 12,
 }
 
 export enum WorkspaceType {

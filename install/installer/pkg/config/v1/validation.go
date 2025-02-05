@@ -1,10 +1,11 @@
 // Copyright (c) 2021 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package config
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 
@@ -15,9 +16,12 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/rest"
 )
 
 var InstallationKindList = map[InstallationKind]struct{}{
+	InstallationIDE:       {},
+	InstallationWebApp:    {},
 	InstallationMeta:      {},
 	InstallationWorkspace: {},
 	InstallationFull:      {},
@@ -38,13 +42,7 @@ var ObjectRefKindList = map[ObjectRefKind]struct{}{
 }
 
 var FSShiftMethodList = map[FSShiftMethod]struct{}{
-	FSShiftFuseFS:  {},
 	FSShiftShiftFS: {},
-}
-
-var LicensorTypeList = map[LicensorType]struct{}{
-	LicensorTypeGitpod:     {},
-	LicensorTypeReplicated: {},
 }
 
 // LoadValidationFuncs load custom validation functions for this version of the config API
@@ -121,14 +119,15 @@ func (v version) ClusterValidation(rcfg interface{}) cluster.ValidationChecks {
 	var res cluster.ValidationChecks
 	res = append(res, cluster.CheckSecret(cfg.Certificate.Name, cluster.CheckSecretRequiredData("tls.crt", "tls.key")))
 
+	res = append(res, cluster.ValidationCheck{
+		Name:        "affinity labels",
+		Check:       checkAffinityLabels(getAffinityListByKind(cfg.Kind)),
+		Description: "all required affinity node labels " + fmt.Sprint(getAffinityListByKind(cfg.Kind)) + " are present in the cluster",
+	})
+
 	if cfg.ObjectStorage.CloudStorage != nil {
 		secretName := cfg.ObjectStorage.CloudStorage.ServiceAccount.Name
 		res = append(res, cluster.CheckSecret(secretName, cluster.CheckSecretRequiredData("service-account.json")))
-	}
-
-	if cfg.ObjectStorage.Azure != nil {
-		secretName := cfg.ObjectStorage.Azure.Credentials.Name
-		res = append(res, cluster.CheckSecret(secretName, cluster.CheckSecretRequiredData("accountName", "accountKey")))
 	}
 
 	if cfg.ObjectStorage.S3 != nil {
@@ -139,6 +138,11 @@ func (v version) ClusterValidation(rcfg interface{}) cluster.ValidationChecks {
 	if cfg.ContainerRegistry.External != nil {
 		secretName := cfg.ContainerRegistry.External.Certificate.Name
 		res = append(res, cluster.CheckSecret(secretName, cluster.CheckSecretRequiredData(".dockerconfigjson")))
+
+		if cfg.ContainerRegistry.External.Credentials != nil {
+			credSecretName := cfg.ContainerRegistry.External.Credentials.Name
+			res = append(res, cluster.CheckSecret(credSecretName, cluster.CheckSecretRequiredData("credentials")))
+		}
 	}
 
 	if cfg.ContainerRegistry.S3Storage != nil {
@@ -156,27 +160,9 @@ func (v version) ClusterValidation(rcfg interface{}) cluster.ValidationChecks {
 		res = append(res, cluster.CheckSecret(secretName, cluster.CheckSecretRequiredData("encryptionKeys", "host", "password", "port", "username")))
 	}
 
-	if cfg.License != nil {
-		secretName := cfg.License.Name
-		licensorKey := "type"
-		res = append(res, cluster.CheckSecret(secretName, cluster.CheckSecretRequiredData("license"), cluster.CheckSecretRecommendedData(licensorKey), cluster.CheckSecretRule(func(s *corev1.Secret) ([]cluster.ValidationError, error) {
-			errors := make([]cluster.ValidationError, 0)
-
-			licensor := LicensorType(s.Data[licensorKey])
-			if licensor != "" {
-				// This field is optional, so blank is valid
-				_, ok := LicensorTypeList[licensor]
-
-				if !ok {
-					errors = append(errors, cluster.ValidationError{
-						Message: fmt.Sprintf("Secret '%s' has invalid license type '%s'", secretName, licensor),
-						Type:    cluster.ValidationStatusError,
-					})
-				}
-			}
-
-			return errors, nil
-		})))
+	if cfg.Database.SSL != nil && cfg.Database.SSL.CaCert != nil {
+		secretName := cfg.Database.SSL.CaCert.Name
+		res = append(res, cluster.CheckSecret(secretName, cluster.CheckSecretRequiredData("ca.crt")))
 	}
 
 	if len(cfg.AuthProviders) > 0 {
@@ -244,11 +230,56 @@ func (v version) ClusterValidation(rcfg interface{}) cluster.ValidationChecks {
 		})))
 	}
 
-	if cfg.CustomCACert != nil {
-		res = append(res, cluster.CheckSecret(cfg.CustomCACert.Name, cluster.CheckSecretRequiredData("ca.crt")))
-	}
-
 	res = append(res, experimental.ClusterValidation(cfg.Experimental)...)
 
 	return res
+}
+
+// checkAffinityLabels validates that the nodes have all the required affinity labels applied
+// It assumes all the values are `true`
+func checkAffinityLabels(targetAffinityList []string) func(context.Context, *rest.Config, string) ([]cluster.ValidationError, error) {
+	return func(ctx context.Context, config *rest.Config, namespace string) ([]cluster.ValidationError, error) {
+		nodes, err := cluster.ListNodesFromContext(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+
+		affinityList := map[string]bool{}
+		for _, affinity := range targetAffinityList {
+			affinityList[affinity] = false
+		}
+
+		var res []cluster.ValidationError
+		for _, node := range nodes {
+			for k, v := range node.GetLabels() {
+				if _, found := affinityList[k]; found {
+					affinityList[k] = v == "true"
+				}
+			}
+		}
+
+		// Check all the values in the map are `true`
+		for k, v := range affinityList {
+			if !v {
+				res = append(res, cluster.ValidationError{
+					Message: "Affinity label not found in cluster: " + k,
+					Type:    cluster.ValidationStatusError,
+				})
+			}
+		}
+		return res, nil
+	}
+}
+
+func getAffinityListByKind(kind InstallationKind) []string {
+	var affinityList []string
+	switch kind {
+	case InstallationMeta:
+		affinityList = cluster.AffinityListMeta
+	case InstallationWorkspace:
+		affinityList = cluster.AffinityListWorkspace
+	default:
+		affinityList = cluster.AffinityList
+	}
+	return affinityList
 }

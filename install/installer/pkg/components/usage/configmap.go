@@ -1,16 +1,20 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
-// Licensed under the MIT License. See License-MIT.txt in the project root for license information.
+/// Licensed under the GNU Affero General Public License (AGPL).
+// See License.AGPL.txt in the project root for license information.
 
 package usage
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/gitpod-io/gitpod/common-go/baseserver"
-	"github.com/gitpod-io/gitpod/usage/pkg/db"
 	"github.com/gitpod-io/gitpod/usage/pkg/server"
+	"github.com/gitpod-io/gitpod/usage/pkg/stripe"
 
+	db "github.com/gitpod-io/gitpod/components/gitpod-db/go"
 	"github.com/gitpod-io/gitpod/installer/pkg/common"
+	"github.com/gitpod-io/gitpod/installer/pkg/components/redis"
 	"github.com/gitpod-io/gitpod/installer/pkg/config/v1/experimental"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,7 +23,8 @@ import (
 
 func configmap(ctx *common.RenderContext) ([]runtime.Object, error) {
 	cfg := server.Config{
-		ControllerSchedule: "", // By default controller is disabled
+		LedgerSchedule:     "", // By default controller is disabled
+		ResetUsageSchedule: time.Duration(15 * time.Minute).String(),
 		Server: &baseserver.Configuration{
 			Services: baseserver.ServicesConfiguration{
 				GRPC: &baseserver.ServerConfiguration{
@@ -29,20 +34,50 @@ func configmap(ctx *common.RenderContext) ([]runtime.Object, error) {
 		},
 		DefaultSpendingLimit: db.DefaultSpendingLimit{
 			// because we only want spending limits in SaaS, if not configured we go with a very high (i.e. no) spending limit
-			ForTeams: 1_000_000_000,
-			ForUsers: 1_000_000_000,
+			ForTeams:            1_000_000_000,
+			ForUsers:            1_000_000_000,
+			MinForUsersOnStripe: 0,
 		},
+		Redis: server.RedisConfiguration{
+			Address: common.ClusterAddress(redis.Component, ctx.Namespace, redis.Port),
+		},
+		ServerAddress: common.ClusterAddress(common.ServerComponent, ctx.Namespace, common.ServerGRPCAPIPort),
+		GitpodHost:    "https://" + ctx.Config.Domain,
 	}
-	expConfig := getExperimentalConfig(ctx)
 
-	if expConfig != nil {
-		if expConfig.Schedule != "" {
-			cfg.ControllerSchedule = expConfig.Schedule
+	expWebAppConfig := common.ExperimentalWebappConfig(ctx)
+	if expWebAppConfig != nil && expWebAppConfig.Stripe != nil {
+		cfg.StripePrices = stripe.StripePrices{
+			IndividualUsagePriceIDs: stripe.PriceConfig{
+				EUR: expWebAppConfig.Stripe.IndividualUsagePriceIDs.EUR,
+				USD: expWebAppConfig.Stripe.IndividualUsagePriceIDs.USD,
+			},
+			TeamUsagePriceIDs: stripe.PriceConfig{
+				EUR: expWebAppConfig.Stripe.TeamUsagePriceIDs.EUR,
+				USD: expWebAppConfig.Stripe.TeamUsagePriceIDs.USD,
+			},
 		}
-		if expConfig.DefaultSpendingLimit != nil {
-			cfg.DefaultSpendingLimit = *expConfig.DefaultSpendingLimit
+	}
+
+	expUsageConfig := getExperimentalUsageConfig(ctx)
+
+	if expUsageConfig != nil {
+		if expUsageConfig.Schedule != "" {
+			cfg.LedgerSchedule = expUsageConfig.Schedule
 		}
-		cfg.CreditsPerMinuteByWorkspaceClass = expConfig.CreditsPerMinuteByWorkspaceClass
+		cfg.ResetUsageSchedule = expUsageConfig.ResetUsageSchedule
+		if expUsageConfig.DefaultSpendingLimit != nil {
+			cfg.DefaultSpendingLimit = *expUsageConfig.DefaultSpendingLimit
+		}
+	}
+
+	workspaceClassConfig := getExperimentalWorkspaceClassConfig(ctx)
+
+	cfg.CreditsPerMinuteByWorkspaceClass = make(map[string]float64)
+	for _, v := range workspaceClassConfig {
+		if v.Credits != nil {
+			cfg.CreditsPerMinuteByWorkspaceClass[v.Id] = v.Credits.PerMinute
+		}
 	}
 
 	_ = ctx.WithExperimental(func(ucfg *experimental.Config) error {

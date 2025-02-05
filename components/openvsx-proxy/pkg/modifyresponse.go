@@ -1,6 +1,6 @@
 // Copyright (c) 2021 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package pkg
 
@@ -19,7 +19,7 @@ import (
 
 func (o *OpenVSXProxy) ModifyResponse(r *http.Response) error {
 	reqid := r.Request.Context().Value(REQUEST_ID_CTX).(string)
-	key := r.Request.Context().Value(REQUEST_CACHE_KEY_CTX).(string)
+	key, ok := r.Request.Context().Value(REQUEST_CACHE_KEY_CTX).(string)
 
 	logFields := logrus.Fields{
 		LOG_FIELD_FUNC:            "response_handler",
@@ -39,8 +39,12 @@ func (o *OpenVSXProxy) ModifyResponse(r *http.Response) error {
 			Info("processing response finished")
 	}(start)
 
-	log.WithFields(logFields).Info("handling response")
+	log.WithFields(logFields).Debug("handling response")
 	o.metrics.IncStatusCounter(r.Request, strconv.Itoa(r.StatusCode))
+
+	if !ok {
+		return nil
+	}
 
 	if key == "" {
 		log.WithFields(logFields).Error("cache key header is missing - sending response as is")
@@ -85,7 +89,7 @@ func (o *OpenVSXProxy) ModifyResponse(r *http.Response) error {
 		r.Body = ioutil.NopCloser(bytes.NewBuffer(cached.Body))
 		r.ContentLength = int64(len(cached.Body))
 		r.StatusCode = cached.StatusCode
-		log.WithFields(logFields).Info("used cache response due to an upstream error")
+		log.WithFields(logFields).Debug("used cache response due to an upstream error")
 		o.metrics.BackupCacheServeCounter.Inc()
 		return nil
 	}
@@ -100,7 +104,7 @@ func (o *OpenVSXProxy) ModifyResponse(r *http.Response) error {
 	if err != nil {
 		log.WithFields(logFields).WithError(err).Error("error storing response to cache")
 	} else {
-		log.WithFields(logFields).Info("successfully stored response to cache")
+		log.WithFields(logFields).Debug("successfully stored response to cache")
 	}
 
 	r.Body = ioutil.NopCloser(bytes.NewBuffer(rawBody))

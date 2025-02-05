@@ -1,6 +1,6 @@
 // Copyright (c) 2020 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package integration
 
@@ -68,15 +68,17 @@ func NewComponentAPI(ctx context.Context, namespace string, kubeconfig string, c
 		imgbldStatusMu:         sync.Mutex{},
 
 		serverStatus: &serverStatus{
-			Client: make(map[string]*gitpod.APIoverJSONRPC),
-			Token:  make(map[string]string),
+			Client:     make(map[string]*gitpod.APIoverJSONRPC),
+			Token:      make(map[string]string),
+			PAPIClient: make(map[string]*PAPIClient),
 		},
 	}
 }
 
 type serverStatus struct {
-	Token  map[string]string
-	Client map[string]*gitpod.APIoverJSONRPC
+	Token      map[string]string
+	Client     map[string]*gitpod.APIoverJSONRPC
+	PAPIClient map[string]*PAPIClient
 }
 
 // ComponentAPI provides access to the individual component's API
@@ -107,6 +109,7 @@ type ComponentAPI struct {
 	wsmanStatusMu          sync.Mutex
 	contentServiceStatusMu sync.Mutex
 	imgbldStatusMu         sync.Mutex
+	serverStatusMu         sync.Mutex
 }
 
 type EncryptionKeyMetadata struct {
@@ -255,6 +258,10 @@ func (c *ComponentAPI) CreateOAuth2Token(user string, scopes []string) (string, 
 	return tkn, nil
 }
 
+func (c *ComponentAPI) ClearGitpodServerClientCache() {
+	c.serverStatus.Client = map[string]*gitpod.APIoverJSONRPC{}
+}
+
 // GitpodServer provides access to the Gitpod server API
 func (c *ComponentAPI) GitpodServer(opts ...GitpodServerOpt) (gitpod.APIInterface, error) {
 	var options gitpodServerOpts
@@ -281,7 +288,11 @@ func (c *ComponentAPI) GitpodServer(opts ...GitpodServerOpt) (gitpod.APIInterfac
 			if err != nil {
 				return err
 			}
-			c.serverStatus.Token[options.User] = tkn
+			func() {
+				c.serverStatusMu.Lock()
+				defer c.serverStatusMu.Unlock()
+				c.serverStatus.Token[options.User] = tkn
+			}()
 		}
 
 		var pods corev1.PodList
@@ -318,7 +329,12 @@ func (c *ComponentAPI) GitpodServer(opts ...GitpodServerOpt) (gitpod.APIInterfac
 			return err
 		}
 
-		c.serverStatus.Client[options.User] = cl
+		func() {
+			c.serverStatusMu.Lock()
+			defer c.serverStatusMu.Unlock()
+			c.serverStatus.Client[options.User] = cl
+		}()
+
 		res = cl
 		c.appendCloser(cl.Close)
 
@@ -329,6 +345,25 @@ func (c *ComponentAPI) GitpodServer(opts ...GitpodServerOpt) (gitpod.APIInterfac
 	}
 
 	return res, nil
+}
+
+func (c *ComponentAPI) GetServerEndpoint() (string, error) {
+	config, err := GetServerConfig(c.namespace, c.client)
+	if err != nil {
+		return "", err
+	}
+
+	hostURL := config.HostURL
+	if hostURL == "" {
+		return "", xerrors.Errorf("server config: empty HostURL")
+	}
+
+	endpoint, err := url.Parse(hostURL)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%s://%s/", "https", endpoint.Hostname()), nil
 }
 
 func (c *ComponentAPI) GitpodSessionCookie(userId string, secretKey string) (*http.Cookie, error) {
@@ -393,7 +428,7 @@ func (c *ComponentAPI) GetUserId(user string) (userId string, err error) {
 	if user == "" {
 		row = db.QueryRow(`SELECT id FROM d_b_user WHERE NOT id = "` + gitpodBuiltinUserID + `" AND blocked = FALSE AND markedDeleted = FALSE`)
 	} else {
-		row = db.QueryRow("SELECT id FROM d_b_user WHERE name = ?", user)
+		row = db.QueryRow("SELECT id FROM d_b_user WHERE name = ? AND blocked != 1 and markedDeleted != 1", user)
 	}
 
 	var id string
@@ -436,7 +471,7 @@ func (c *ComponentAPI) CreateUser(username string, token string) (string, error)
 	}
 
 	var userId string
-	err = db.QueryRow(`SELECT id FROM d_b_user WHERE name = ?`, username).Scan(&userId)
+	err = db.QueryRow(`SELECT id FROM d_b_user WHERE name = ? and markedDeleted != 1 and blocked != 1`, username).Scan(&userId)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
@@ -448,13 +483,14 @@ func (c *ComponentAPI) CreateUser(username string, token string) (string, error)
 		}
 
 		userId = userUuid.String()
-		_, err = db.Exec(`INSERT IGNORE INTO d_b_user (id, creationDate, avatarUrl, name, fullName, featureFlags) VALUES (?, ?, ?, ?, ?, ?)`,
+		_, err = db.Exec(`INSERT IGNORE INTO d_b_user (id, creationDate, avatarUrl, name, fullName, featureFlags, lastVerificationTime) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			userId,
 			time.Now().Format(time.RFC3339),
 			"",
 			username,
 			username,
 			"{\"permanentWSFeatureFlags\":[]}",
+			time.Now().Format(time.RFC3339),
 		)
 		if err != nil {
 			return "", err
@@ -468,12 +504,11 @@ func (c *ComponentAPI) CreateUser(username string, token string) (string, error)
 	}
 	if authId == "" {
 		authId = strconv.FormatInt(time.Now().UnixMilli(), 10)
-		_, err = db.Exec(`INSERT IGNORE INTO d_b_identity (authProviderId, authId, authName, userId, tokens) VALUES (?, ?, ?, ?, ?)`,
+		_, err = db.Exec(`INSERT IGNORE INTO d_b_identity (authProviderId, authId, authName, userId) VALUES (?, ?, ?, ?)`,
 			"Public-GitHub",
 			authId,
 			username,
 			userId,
-			"[]",
 		)
 		if err != nil {
 			return "", err
@@ -497,7 +532,7 @@ func (c *ComponentAPI) CreateUser(username string, token string) (string, error)
 			Scopes []string `json:"scopes"`
 		}{
 			Value:  token,
-			Scopes: []string{},
+			Scopes: []string{"user:email", "read:user", "public_repo"},
 		}
 		valueBytes, err := json.Marshal(value)
 		if err != nil {
@@ -638,11 +673,12 @@ func (c *ComponentAPI) WorkspaceManager() (wsmanapi.WorkspaceManagerClient, erro
 		return c.wsmanStatus.Client, nil
 	}
 
+	var wsman = ComponentWorkspaceManagerMK2
 	if c.wsmanStatus.Port == 0 {
 		c.wsmanStatusMu.Lock()
 		defer c.wsmanStatusMu.Unlock()
 
-		pod, _, err := selectPod(ComponentWorkspaceManager, selectPodOptions{}, c.namespace, c.client)
+		pod, _, err := selectPod(wsman, selectPodOptions{}, c.namespace, c.client)
 		if err != nil {
 			return nil, err
 		}
@@ -663,7 +699,7 @@ func (c *ComponentAPI) WorkspaceManager() (wsmanapi.WorkspaceManagerClient, erro
 		c.wsmanStatus.Port = localPort
 	}
 
-	secretName := "ws-manager-client-tls"
+	secretName := fmt.Sprintf("%s-client-tls", wsman)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c.appendCloser(func() error { cancel(); return nil })
@@ -689,7 +725,7 @@ func (c *ComponentAPI) WorkspaceManager() (wsmanapi.WorkspaceManagerClient, erro
 	creds := credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      certPool,
-		ServerName:   "ws-manager",
+		ServerName:   string(wsman),
 	})
 	dialOption := grpc.WithTransportCredentials(creds)
 
@@ -768,6 +804,13 @@ func DBName(name string) DBOpt {
 	}
 }
 
+var (
+	// cachedDBs caches DB connections per database name, so we don't have to re-establish connections all the time,
+	// saving us a lot of time in integration tests.
+	// The cache gets cleaned up when the component is closed.
+	cachedDBs = sync.Map{}
+)
+
 // DB provides access to the Gitpod database.
 // Callers must never close the DB.
 func (c *ComponentAPI) DB(options ...DBOpt) (*sql.DB, error) {
@@ -778,6 +821,11 @@ func (c *ComponentAPI) DB(options ...DBOpt) (*sql.DB, error) {
 		o(&opts)
 	}
 
+	if db, ok := cachedDBs.Load(opts.Database); ok {
+		actualDb := db.(*sql.DB)
+		return actualDb, nil
+	}
+
 	config, err := c.findDBConfig()
 	if err != nil {
 		return nil, err
@@ -785,7 +833,7 @@ func (c *ComponentAPI) DB(options ...DBOpt) (*sql.DB, error) {
 
 	// if configured: setup local port-forward to DB pod
 	if config.ForwardPort != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 		err = c.portFwdWithRetry(ctx, common.ForwardPortOfPod, config.ForwardPort.PodName, int(config.Port), int(config.ForwardPort.RemotePort))
 		if err != nil {
 			cancel()
@@ -798,8 +846,15 @@ func (c *ComponentAPI) DB(options ...DBOpt) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Hack: to fix new DB connections occasionally failing with `[mysql] packets.go:33: unexpected EOF` due
+	// to getting an idle connection from the pool which has for some reason been closed.
+	db.SetMaxIdleConns(0)
 
-	c.appendCloser(db.Close)
+	cachedDBs.Store(opts.Database, db)
+	c.appendCloser(func() error {
+		cachedDBs.Delete(opts.Database)
+		return db.Close()
+	})
 	return db, nil
 }
 
@@ -1014,12 +1069,13 @@ func (c *ComponentAPI) ImageBuilder(opts ...APIImageBuilderOpt) (imgbldr.ImageBu
 		return c.imgbldStatus.Client, nil
 	}
 
+	imgbuilder := ComponentImageBuilderMK3
 	err := func() error {
 		if c.imgbldStatus.Port == 0 {
 			c.imgbldStatusMu.Lock()
 			defer c.imgbldStatusMu.Unlock()
 
-			pod, _, err := selectPod(ComponentImageBuilderMK3, selectPodOptions{}, c.namespace, c.client)
+			pod, _, err := selectPod(imgbuilder, selectPodOptions{}, c.namespace, c.client)
 			if err != nil {
 				return err
 			}
@@ -1064,6 +1120,7 @@ func (c *ComponentAPI) ClearImageBuilderClientCache() {
 type ContentService interface {
 	csapi.ContentServiceClient
 	csapi.WorkspaceServiceClient
+	csapi.HeadlessLogServiceClient
 }
 
 func (c *ComponentAPI) ContentService() (ContentService, error) {
@@ -1099,11 +1156,13 @@ func (c *ComponentAPI) ContentService() (ContentService, error) {
 	type cs struct {
 		csapi.ContentServiceClient
 		csapi.WorkspaceServiceClient
+		csapi.HeadlessLogServiceClient
 	}
 
 	c.contentServiceStatus.ContentService = cs{
-		ContentServiceClient:   csapi.NewContentServiceClient(conn),
-		WorkspaceServiceClient: csapi.NewWorkspaceServiceClient(conn),
+		ContentServiceClient:     csapi.NewContentServiceClient(conn),
+		WorkspaceServiceClient:   csapi.NewWorkspaceServiceClient(conn),
+		HeadlessLogServiceClient: csapi.NewHeadlessLogServiceClient(conn),
 	}
 
 	return c.contentServiceStatus.ContentService, nil
@@ -1123,6 +1182,17 @@ func (c *ComponentAPI) Done(t *testing.T) {
 		if err != nil {
 			t.Logf("cleanup failed: %q", err)
 		}
+	}
+
+	if t.Failed() {
+		// Log preview env status when test fails to help debug the failure.
+		ready, reason, err := isPreviewReady(c.client, c.namespace)
+		if err != nil {
+			t.Logf("failed to check preview status: %q", err)
+		} else {
+			t.Logf("preview status: ready=%v, reason=%s", ready, reason)
+		}
+		logGitpodStatus(t, c.client, c.namespace)
 	}
 }
 
@@ -1150,11 +1220,6 @@ func (c *ComponentAPI) portFwdWithRetry(ctx context.Context, portFwdF portFwdFun
 			return nil
 		}
 	}
-}
-
-func (c *ComponentAPI) IsPVCExist(pvcName string) bool {
-	var pvc corev1.PersistentVolumeClaim
-	return c.client.Resources().Get(context.Background(), pvcName, c.namespace, &pvc) == nil
 }
 
 // RestartDeployment rollout restart the deployment by updating the

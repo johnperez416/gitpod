@@ -1,8 +1,8 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
-package v2
+package cgroups_v2
 
 import (
 	"path/filepath"
@@ -62,4 +62,9 @@ func (m *Memory) Stat() (*cgroups.MemoryStats, error) {
 	return &cgroups.MemoryStats{
 		InactiveFileTotal: statMap["inactive_file"],
 	}, nil
+}
+
+func (m *Memory) PSI() (cgroups.PSI, error) {
+	path := filepath.Join(m.path, "memory.pressure")
+	return cgroups.ReadPSIValue(path)
 }

@@ -1,6 +1,6 @@
 // Copyright (c) 2022 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package io.gitpod.jetbrains.remote
 
@@ -17,7 +17,7 @@ class GitpodGatewayClientCustomizationProvider : GatewayClientCustomizationProvi
 
     override val controlCenter: GatewayControlCenterProvider = object : GatewayControlCenterProvider {
         override fun getHostnameDisplayKind() = GatewayHostnameDisplayKind.ShowHostnameOnNavbar
-        override fun getHostnameShort() = title
+        override fun getHostnameShort() = System.getenv("GITPOD_WORKSPACE_NAME") ?: title
         override fun getHostnameLong() = title
     }
 }

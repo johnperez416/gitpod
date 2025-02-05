@@ -1,6 +1,6 @@
 // Copyright (c) 2020 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package wsmanager
 
@@ -40,32 +40,25 @@ func TestRegularWorkspaceTasks(t *testing.T) {
 			},
 			LookForFile: []string{"init-ran", "before-ran", "command-ran"},
 		},
-		{
-			Name: "pvc",
-			Task: []gitpod.TasksItems{
-				{Init: fmt.Sprintf("touch %s/init-ran; exit", wsLoc)},
-				{Before: fmt.Sprintf("touch %s/before-ran; exit", wsLoc)},
-				{Command: fmt.Sprintf("touch %s/command-ran; exit", wsLoc)},
-			},
-			LookForFile: []string{"init-ran", "before-ran", "command-ran"},
-			FF:          []wsmanapi.WorkspaceFeatureFlag{wsmanapi.WorkspaceFeatureFlag_PERSISTENT_VOLUME_CLAIM},
-		},
 	}
 
 	f := features.New("ws-manager").
 		WithLabel("component", "ws-manager").
 		WithLabel("type", "tasks").
-		Assess("it can run workspace tasks", func(_ context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-
-			api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
-			t.Cleanup(func() {
-				api.Done(t)
-			})
-
+		Assess("it can run workspace tasks", func(testCtx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			for _, test := range tests {
+				test := test
 				t.Run(test.Name, func(t *testing.T) {
+					t.Parallel()
+
+					ctx, cancel := context.WithTimeout(testCtx, time.Duration(5*len(tests))*time.Minute)
+					defer cancel()
+
+					api := integration.NewComponentAPI(ctx, cfg.Namespace(), kubeconfig, cfg.Client())
+					t.Cleanup(func() {
+						api.Done(t)
+					})
+
 					addInitTask := func(swr *wsmanapi.StartWorkspaceRequest) error {
 						tasks, err := json.Marshal(test.Task)
 						if err != nil {
@@ -96,7 +89,7 @@ func TestRegularWorkspaceTasks(t *testing.T) {
 						t.Fatal(err)
 					}
 
-					defer func() {
+					t.Cleanup(func() {
 						sctx, scancel := context.WithTimeout(context.Background(), 5*time.Minute)
 						defer scancel()
 
@@ -106,7 +99,7 @@ func TestRegularWorkspaceTasks(t *testing.T) {
 						if _, err = stopWs(true, sapi); err != nil {
 							t.Errorf("cannot stop workspace: %q", err)
 						}
-					}()
+					})
 
 					rsa, closer, err := integration.Instrument(integration.ComponentWorkspace, "workspace", cfg.Namespace(), kubeconfig, cfg.Client(), integration.WithInstanceID(nfo.Req.Id))
 					integration.DeferCloser(t, closer)
@@ -176,7 +169,7 @@ func TestRegularWorkspaceTasks(t *testing.T) {
 				})
 			}
 
-			return ctx
+			return testCtx
 		}).
 		Feature()
 

@@ -1,6 +1,6 @@
 // Copyright (c) 2020 Gitpod GmbH. All rights reserved.
 // Licensed under the GNU Affero General Public License (AGPL).
-// See License-AGPL.txt in the project root for license information.
+// See License.AGPL.txt in the project root for license information.
 
 package blobserve
 
@@ -215,6 +215,7 @@ func (b *diskBlobspace) AddFromTar(ctx context.Context, name string, in io.Reade
 	for _, mod := range modifications {
 		err := b.modifyFile(name, mod.Path, mod.Modifier)
 		if err != nil {
+			// Check if file really exists in blobserve configmap.go
 			log.WithField("path", mod.Path).WithError(err).Error("Blobspace::AddFromTar error while trying to modify file")
 		}
 	}

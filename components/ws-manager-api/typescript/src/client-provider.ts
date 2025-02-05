@@ -1,21 +1,25 @@
 /**
  * Copyright (c) 2020 Gitpod GmbH. All rights reserved.
  * Licensed under the GNU Affero General Public License (AGPL).
- * See License-AGPL.txt in the project root for license information.
+ * See License.AGPL.txt in the project root for license information.
  */
 
 import { createClientCallMetricsInterceptor, IClientCallMetrics } from "@gitpod/gitpod-protocol/lib/util/grpc";
-import { Disposable, Workspace, WorkspaceInstance } from "@gitpod/gitpod-protocol";
+import { Disposable, User, Workspace, WorkspaceInstance } from "@gitpod/gitpod-protocol";
 import { defaultGRPCOptions } from "@gitpod/gitpod-protocol/lib/util/grpc";
 import { log } from "@gitpod/gitpod-protocol/lib/util/logging";
-import { WorkspaceClusterWoTLS, WorkspaceManagerConnectionInfo } from "@gitpod/gitpod-protocol/lib/workspace-cluster";
+import {
+    WorkspaceClusterWoTLS,
+    WorkspaceManagerConnectionInfo,
+    WorkspaceRegion,
+} from "@gitpod/gitpod-protocol/lib/workspace-cluster";
 import * as grpc from "@grpc/grpc-js";
 import { inject, injectable, optional } from "inversify";
 import {
     WorkspaceManagerClientProviderCompositeSource,
     WorkspaceManagerClientProviderSource,
 } from "./client-provider-source";
-import { ExtendedUser, workspaceClusterSetsAuthorized } from "./constraints";
+import { workspaceClusterSetsAuthorized, workspaceClusterSetsAuthorizedAndSupportsWorkspaceClass } from "./constraints";
 import { WorkspaceManagerClient } from "./core_grpc_pb";
 import { linearBackoffStrategy, PromisifiedWorkspaceManagerClient } from "./promisified-client";
 
@@ -43,19 +47,27 @@ export class WorkspaceManagerClientProvider implements Disposable {
      * @param user user who wants to starts a workspace manager
      * @param workspace the workspace we want to start
      * @param instance the instance we want to start
+     * @param region the region we want to start the workspace in
+     * @param constrainWorkspaceClassSupport if true, only clusters that support the workspace class of the workspace are returned
      * @returns a set of workspace clusters we can start the workspace in
      */
     public async getStartClusterSets(
-        user: ExtendedUser,
-        workspace: Workspace,
-        instance: WorkspaceInstance,
+        user: User,
+        workspace?: Workspace,
+        instance?: WorkspaceInstance,
+        region?: WorkspaceRegion,
+        constrainWorkspaceClassSupport?: boolean,
     ): Promise<IWorkspaceClusterStartSet> {
         const allClusters = await this.source.getAllWorkspaceClusters();
         const availableClusters = allClusters.filter((c) => c.score > 0 && c.state === "available");
 
-        const sets = workspaceClusterSetsAuthorized
+        let baseSets = workspaceClusterSetsAuthorized;
+        if (constrainWorkspaceClassSupport) {
+            baseSets = workspaceClusterSetsAuthorizedAndSupportsWorkspaceClass;
+        }
+        const sets = baseSets
             .map((constraints) => {
-                const r = constraints.constraint(availableClusters, user, workspace, instance);
+                const r = constraints.constraint(availableClusters, { user, workspace, instance, region });
                 if (!r) {
                     return;
                 }
